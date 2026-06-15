@@ -162,7 +162,7 @@ function renderProfil() {
       <div class="rowline"><button class="btn primary" data-action="export">Exporter</button><button class="btn" data-action="import">Importer</button></div>
       <label class="rowline"><input type="checkbox" id="remind" ${store.getSetting("remindBackup")?"checked":""}/> Rappel de sauvegarde après chaque séance</label>
       <div class="sub">Dernière sauvegarde : ${last?new Date(last).toLocaleString("fr-FR"):"jamais"}</div></div>
-    <input id="importfile" type="file" accept="application/json,.json" hidden/>
+    <input id="importfile" type="file" accept=".json,.txt,application/json,text/plain" hidden/>
     <div class="card col"><div class="title">Réglages</div>
       <label class="rowline"><span class="grow">Repos par défaut (nouveaux exos)</span>
         <select id="defrest" class="field auto">${[45,60,75,90,120,150].map(v=>`<option ${store.getSetting("defaultRest")===v?"selected":""}>${v}</option>`).join("")}</select> s</label>
@@ -427,11 +427,27 @@ function showPicker(onPick) {
 let pickerCb = null;
 
 // ---------- export / import ----------
-async function doExport() {
-  const text = store.exportJSON(); const file = new File([text], "muscu-sauvegarde.json", { type: "application/json" });
+// iOS PWA : NE PAS utiliser navigator.share (WebKit renomme le .json en "text.txt").
+// On force le nom via un <a download> : data: URL sur iOS (extension respectée + "Enregistrer
+// dans Fichiers"), blob: sur desktop/Android (pas de limite de taille). cf. w3c/web-share#201.
+function doExport() {
+  const text = store.exportJSON();
+  const filename = "muscu-sauvegarde.json";
+  const ua = navigator.userAgent || "";
+  const iOSLike = /iPad|iPhone|iPod/.test(ua) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+  const a = document.createElement("a");
+  a.download = filename; a.rel = "noopener"; a.style.display = "none";
+  let objUrl = null;
+  if (iOSLike) {
+    a.href = "data:application/json;charset=utf-8," + encodeURIComponent(text);
+  } else {
+    const blob = new Blob([text], { type: "application/json" });
+    a.href = objUrl = URL.createObjectURL(blob);
+  }
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  if (objUrl) setTimeout(() => URL.revokeObjectURL(objUrl), 1500);
   store.setSetting("lastBackup", new Date().toISOString());
-  try { if (navigator.canShare && navigator.canShare({ files: [file] })) { await navigator.share({ files: [file], title: "Sauvegarde Muscu" }); toast("Choisis « Enregistrer dans Fichiers » → iCloud Drive"); return; } } catch (e) {}
-  const url = URL.createObjectURL(file); const a = document.createElement("a"); a.href = url; a.download = "muscu-sauvegarde.json"; a.click(); setTimeout(() => URL.revokeObjectURL(url), 1000); toast("Sauvegarde exportée");
+  toast(iOSLike ? "Aperçu ouvert → « Enregistrer dans Fichiers » → iCloud Drive" : "Sauvegarde exportée (muscu-sauvegarde.json)");
 }
 function doImport(file) { const r = new FileReader(); r.onload = () => { try { const res = store.importJSON(r.result); toast(`Importé : ${res.sessions} séances, ${res.weights} pesées`); render(); } catch (e) { toast("Fichier invalide"); } }; r.readAsText(file); }
 
