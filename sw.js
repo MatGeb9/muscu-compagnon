@@ -1,11 +1,11 @@
 // Service worker — cache + auto-update (stale-while-revalidate).
 // Sert le cache instantanément (marche hors-ligne) ET récupère la version fraîche
 // en arrière-plan → la mise à jour apparaît au rechargement suivant, sans bump manuel.
-const CACHE = "muscu-v2";
+const CACHE = "muscu-v3";
 const ASSETS = [
   "./", "./index.html",
   "./css/styles.css",
-  "./js/app.js", "./js/store.js", "./js/data.js",
+  "./js/app.js", "./js/store.js", "./js/data.js", "./js/charts.js",
   "./manifest.webmanifest",
   "./icons/icon-180.png", "./icons/icon-192.png", "./icons/icon-512.png", "./icons/icon-1024.png",
 ];
