@@ -149,3 +149,12 @@ textarea.field{width:100%;resize:vertical;font:inherit}
 
 /* sélecteur d'exercice */
 .pickrow{cursor:pointer}.pickrow .chev{font-size:20px}
+
+/* édition d'une séance passée */
+.seteditrow{display:flex;align-items:center;gap:6px;padding:5px 0;border-top:1px solid var(--line)}
+.seteditrow:first-of-type{border-top:none}
+.seteditrow .lbl{width:34px;font-weight:700;flex:none;text-align:center}
+.seteditrow .field{flex:1;min-width:0;padding:8px 4px}
+.seteditrow .field.rpe{flex:0 0 50px}
+.seteditrow .acts{display:flex;gap:3px;flex:none}
+.seteditrow .acts .info{width:28px;height:28px;font-size:13px}

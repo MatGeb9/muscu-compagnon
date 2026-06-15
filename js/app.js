@@ -34,6 +34,7 @@ function render() {
   if (state.screen === "warmup") return renderWarmup();
   if (state.screen === "live") return renderLive();
   if (state.screen === "editor") return renderEditor();
+  if (state.screen === "editsession") return renderSessionEdit();
   app.innerHTML = ({ home: renderHome, programmes: renderProgrammes, exos: renderExos, progress: renderProgress, profil: renderProfil }[state.tab] || renderHome)();
   renderTabbar();
 }
@@ -329,11 +330,55 @@ function showSession(id) {
   m.innerHTML = `<div class="sheet" data-action="stop">
     <div class="rowline"><div class="grow"><div class="title">${s.routineName}</div>
       <div class="sub">${dateFR(s.date,{weekday:"long",day:"numeric",month:"long",hour:"2-digit",minute:"2-digit"})}${s.sessionRPE?` · RPE ${s.sessionRPE}/10`:""}</div></div>
+      <button class="link" data-action="edit-session" data-id="${s.id}">Modifier</button>
       <button class="link strong" data-action="close-modal">Fermer</button></div>
     <div class="sub">${s.sets.filter(x=>!x.isWarmup).length} séries · ${Math.round(s.totalVolume||0)} kg de volume</div>
     ${Object.entries(byEx).map(([n, sets]) => `<h3>${n}</h3>${sets.map(x => `<div class="exline"><span class="${x.isWarmup?"warm":""}" style="width:42px">${x.isWarmup?"Éch":x.setIndex}</span><div class="grow">${fmtNum(x.weight)} kg × ${x.reps}${x.rpe?` · RPE ${x.rpe}`:""}</div></div>`).join("")}`).join("")}
     <button class="btn big" data-action="del-session" data-id="${s.id}" style="background:#3a1d1d;color:#ff6a6a">Supprimer cette séance</button></div>`;
   document.body.appendChild(m);
+}
+
+// ---------- ÉDITION D'UNE SÉANCE PASSÉE ----------
+function openSessionEdit(id) {
+  const s = store.getSession(id); if (!s) return;
+  document.querySelector(".modal")?.remove();
+  const order = [], map = {};
+  s.sets.forEach(x => { if (!map[x.exerciseName]) { map[x.exerciseName] = []; order.push(x.exerciseName); } map[x.exerciseName].push({ weight: x.weight, reps: x.reps, rpe: x.rpe, isWarmup: !!x.isWarmup }); });
+  state.sessionEdit = { id, date: s.date, routineName: s.routineName, sessionRPE: s.sessionRPE || null, groups: order.map(n => ({ name: n, sets: map[n] })) };
+  state.screen = "editsession"; render();
+}
+function renderSessionEdit() {
+  const se = state.sessionEdit;
+  app.innerHTML = `<header class="head"><button class="link" data-action="cancel-sedit">Annuler</button>
+    <h1>Modifier la séance</h1><button class="link strong" data-action="save-sedit">OK</button></header>
+    <div class="scroll">
+      <p class="sub">${se.routineName} · ${dateFR(se.date,{weekday:"long",day:"numeric",month:"long"})}</p>
+      ${se.groups.map((g, gi) => `<div class="card col"><div class="title">${g.name}</div>
+        ${g.sets.map((s, si) => `<div class="seteditrow">
+          <span class="lbl ${s.isWarmup?"warm":""}" data-action="se-warm" data-gi="${gi}" data-si="${si}">${s.isWarmup?"Éch":si+1}</span>
+          <input class="field" type="number" inputmode="decimal" value="${s.weight}" data-sef="weight" data-gi="${gi}" data-si="${si}" placeholder="kg"/>
+          <input class="field" type="number" inputmode="numeric" value="${s.reps}" data-sef="reps" data-gi="${gi}" data-si="${si}" placeholder="reps"/>
+          <select class="field rpe" data-sef="rpe" data-gi="${gi}" data-si="${si}"><option value="">–</option>${RPES.map(v=>`<option ${s.rpe==v?"selected":""}>${v}</option>`).join("")}</select>
+          <span class="acts"><button class="info" data-action="se-up" data-gi="${gi}" data-si="${si}">↑</button>
+            <button class="info" data-action="se-down" data-gi="${gi}" data-si="${si}">↓</button>
+            <button class="info" data-action="se-del" data-gi="${gi}" data-si="${si}">✕</button></span></div>`).join("")}
+        <button class="btn ghost" data-action="se-addset" data-gi="${gi}">+ série</button></div>`).join("")}
+      <div class="card col"><label class="rowline"><span class="grow">Ressenti global (RPE)</span>
+        <select id="se-rpe" class="field auto"><option value="">–</option>${[1,2,3,4,5,6,7,8,9,10].map(v=>`<option ${se.sessionRPE==v?"selected":""}>${v}</option>`).join("")}</select></label></div>
+      <p class="sub">Astuce : touche « Éch / numéro » pour basculer une série en échauffement.</p>
+      <div class="pad"></div></div>`;
+  renderTabbar();
+}
+function saveSessionEdit() {
+  const se = state.sessionEdit;
+  const sets = []; let order = 0;
+  se.groups.filter(g => g.sets.length).forEach(g => {
+    let work = 0;
+    g.sets.forEach(s => sets.push({ exerciseName: g.name, order: order++, setIndex: s.isWarmup ? 0 : (++work),
+      weight: +s.weight || 0, reps: +s.reps || 0, rpe: s.rpe ? +s.rpe : null, isWarmup: !!s.isWarmup }));
+  });
+  store.updateSession(se.id, { sessionRPE: se.sessionRPE || null, sets });
+  state.screen = "home"; state.tab = "progress"; state.sessionEdit = null; render(); toast("Séance modifiée");
 }
 
 // ---------- ÉDITEUR DE SÉANCE PERSO ----------
@@ -402,6 +447,15 @@ document.addEventListener("click", e => {
   if (a === "open-warmup") return openWarmup(el.dataset.id);
   if (a === "view-session") return showSession(el.dataset.id);
   if (a === "del-session") { if (confirm("Supprimer cette séance ?")) { store.deleteSession(el.dataset.id); document.querySelector(".modal")?.remove(); render(); } return; }
+  // édition d'une séance passée
+  if (a === "edit-session") return openSessionEdit(el.dataset.id);
+  if (a === "cancel-sedit") { state.screen = "home"; state.tab = "progress"; state.sessionEdit = null; return render(); }
+  if (a === "save-sedit") return saveSessionEdit();
+  if (a === "se-del") { const g = state.sessionEdit.groups[+el.dataset.gi]; g.sets.splice(+el.dataset.si, 1); if (!g.sets.length) state.sessionEdit.groups.splice(+el.dataset.gi, 1); return renderSessionEdit(); }
+  if (a === "se-up") { const g = state.sessionEdit.groups[+el.dataset.gi].sets, k = +el.dataset.si; if (k > 0) [g[k-1], g[k]] = [g[k], g[k-1]]; return renderSessionEdit(); }
+  if (a === "se-down") { const g = state.sessionEdit.groups[+el.dataset.gi].sets, k = +el.dataset.si; if (k < g.length - 1) [g[k+1], g[k]] = [g[k], g[k+1]]; return renderSessionEdit(); }
+  if (a === "se-addset") { const g = state.sessionEdit.groups[+el.dataset.gi].sets, last = g[g.length-1]; g.push({ weight: last?.weight || 0, reps: last?.reps || 10, rpe: null, isWarmup: false }); return renderSessionEdit(); }
+  if (a === "se-warm") { const s = state.sessionEdit.groups[+el.dataset.gi].sets[+el.dataset.si]; s.isWarmup = !s.isWarmup; return renderSessionEdit(); }
   // warm-up
   if (a === "cancel-warmup") { state.screen = "home"; state.warmup = null; clearInterval(restTimer); return render(); }
   if (a === "skip-warmup") { state.warmup.endAt = Date.now(); state.warmup.remaining = 0; clearInterval(restTimer); return renderWarmup(); }
@@ -443,11 +497,14 @@ document.addEventListener("input", e => {
   if (f && state.live) { state.live.exercises[+f.dataset.ei].sets[+f.dataset.si][f.dataset.f] = f.dataset.f === "rpe" ? (e.target.value ? +e.target.value : null) : e.target.value; return; }
   const ef = e.target.closest("[data-ef]");
   if (ef && state.editor) { state.editor.exercises[+ef.dataset.i][ef.dataset.ef] = +e.target.value || 0; return; }
+  const sef = e.target.closest("[data-sef]");
+  if (sef && state.sessionEdit) { const s = state.sessionEdit.groups[+sef.dataset.gi].sets[+sef.dataset.si]; s[sef.dataset.sef] = sef.dataset.sef === "rpe" ? (e.target.value ? +e.target.value : null) : e.target.value; return; }
   if (e.target.id === "pickerq") { const q = e.target.value.toLowerCase(); document.querySelectorAll("#pickerlist .pickrow").forEach(r => r.style.display = r.dataset.name.includes(q) ? "" : "none"); return; }
 });
 document.addEventListener("change", e => {
   if (e.target.id === "importfile" && e.target.files[0]) doImport(e.target.files[0]);
   if (e.target.id === "chartex") { state.chartEx = e.target.value; render(); }
+  if (e.target.id === "se-rpe" && state.sessionEdit) state.sessionEdit.sessionRPE = e.target.value ? +e.target.value : null;
   if (e.target.id === "remind") store.setSetting("remindBackup", e.target.checked);
   if (e.target.id === "defrest") store.setSetting("defaultRest", +e.target.value);
   if (e.target.id === "notify") { store.setSetting("notify", e.target.checked); if (e.target.checked && "Notification" in window && Notification.permission !== "granted") Notification.requestPermission(); }

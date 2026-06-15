@@ -61,6 +61,12 @@ export function addSession(s) { const d = load(); d.sessions.unshift(s); save();
 export function getSessions() { return load().sessions; }
 export function getSession(id) { return load().sessions.find(s => s.id === id); }
 export function deleteSession(id) { const d = load(); d.sessions = d.sessions.filter(s => s.id !== id); save(); }
+export function updateSession(id, patch) {
+  const d = load(); const s = d.sessions.find(x => x.id === id); if (!s) return;
+  Object.assign(s, patch);
+  s.totalVolume = (s.sets || []).filter(x => !x.isWarmup).reduce((a, x) => a + x.weight * x.reps, 0);
+  save();
+}
 
 // --- Suivi intelligent ---
 export function lastSetsFor(name) {
