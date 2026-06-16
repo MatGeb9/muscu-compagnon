@@ -5,14 +5,16 @@ import { lineChart } from "./charts.js";
 const $ = (s, r = document) => r.querySelector(s);
 const app = $("#app");
 
-let state = { tab: "home", screen: "home", routineId: null, warmup: null, live: null, editor: null, viewSessionId: null, chartEx: null };
+let state = { tab: "home", screen: "home", routineId: null, warmup: null, live: null, editor: null, viewSessionId: null, chartEx: null, calOffset: 0 };
 let sessionTimer = null, restTimer = null;
 let rest = { running: false, remaining: 0, total: 0, endAt: 0 };
+let wakeLock = null, audioCtx = null;
 
 // ---------- utils ----------
 const fmtClock = s => `${Math.floor(s / 60)}:${String(Math.max(0, s % 60)).padStart(2, "0")}`;
 const exOf = id => store.getExercise(id);
 const fmtNum = n => (Math.round(n * 100) / 100).toString();
+const numW = v => parseFloat(String(v).replace(",", ".")) || 0; // tolère la virgule décimale (clavier FR)
 const dateFR = (d, o) => new Date(d).toLocaleDateString("fr-FR", o || { weekday: "short", day: "numeric", month: "short" });
 function startOfWeek() { const d = new Date(); const day = (d.getDay() + 6) % 7; d.setHours(0,0,0,0); d.setDate(d.getDate() - day); return d; }
 function jointsFor(routine) {
@@ -55,7 +57,7 @@ function weekStrip() {
     const isToday = day.toDateString() === new Date().toDateString();
     const dots = sessions.filter(s => new Date(s.date).toDateString() === day.toDateString());
     return `<div class="day ${isToday ? "today" : ""}"><span>${d}</span><b>${day.getDate()}</b>
-      <div class="dots">${dots.map(s => `<i style="background:${(store.getRoutine(s.routineId)||{}).color || "#888"}"></i>`).join("")}</div></div>`;
+      <div class="dots">${dots.map(s => `<i style="background:${s.color || (store.getRoutine(s.routineId)||{}).color || "#888"}"></i>`).join("")}</div></div>`;
   }).join("")}</div>`;
 }
 function renderHome() {
@@ -122,6 +124,30 @@ function showExercise(id) {
 }
 
 // ---------- PROGRESSION ----------
+function monthCalendar() {
+  const base = new Date(); base.setDate(1); base.setMonth(base.getMonth() + (state.calOffset || 0));
+  const year = base.getFullYear(), month = base.getMonth();
+  const monthName = base.toLocaleDateString("fr-FR", { month: "long", year: "numeric" });
+  const startDow = (new Date(year, month, 1).getDay() + 6) % 7;      // lundi = 0
+  const daysInMonth = new Date(year, month + 1, 0).getDate();
+  const byDay = {};
+  store.getSessions().forEach(s => { const d = new Date(s.date); if (d.getFullYear() === year && d.getMonth() === month) (byDay[d.getDate()] = byDay[d.getDate()] || []).push(s); });
+  const todayStr = new Date().toDateString();
+  const dows = ["L", "M", "M", "J", "V", "S", "D"];
+  let cells = "";
+  for (let i = 0; i < startDow; i++) cells += `<div class="cal-cell empty"></div>`;
+  for (let d = 1; d <= daysInMonth; d++) {
+    const isToday = new Date(year, month, d).toDateString() === todayStr;
+    const list = byDay[d] || [];
+    const dots = list.map(s => `<i data-action="view-session" data-id="${s.id}" style="background:${s.color || (store.getRoutine(s.routineId) || {}).color || "#888"}"></i>`).join(""); // chaque pastille ouvre sa séance
+    const act = list.length ? `data-action="view-session" data-id="${list[0].id}"` : "";
+    cells += `<div class="cal-cell ${isToday ? "today" : ""} ${list.length ? "has" : ""}" ${act}><b>${d}</b><div class="cal-dots">${dots}</div></div>`;
+  }
+  return `<div class="card col"><div class="rowline"><button class="info" data-action="cal-prev">‹</button>
+      <div class="title grow" style="text-align:center;text-transform:capitalize">${monthName}</div>
+      <button class="info" data-action="cal-next" ${(state.calOffset || 0) >= 0 ? "disabled" : ""}>›</button></div>
+    <div class="cal-grid">${dows.map(d => `<div class="cal-dow">${d}</div>`).join("")}${cells}</div></div>`;
+}
 function renderProgress() {
   const sessions = store.getSessions();
   const weights = store.getBodyWeights();
@@ -141,7 +167,7 @@ function renderProgress() {
       </div>`;
   }
   const bwBlock = `<div class="card col"><div class="title">Poids du corps</div>
-      <div class="rowline"><input id="bw" class="field" type="number" inputmode="decimal" placeholder="kg"/>
+      <div class="rowline"><input id="bw" class="field" type="text" inputmode="decimal" placeholder="kg"/>
       <button class="btn primary" data-action="addbw">Ajouter</button></div>
       ${weights.length >= 2 ? `<div class="chartlabel">Évolution</div>${lineChart(store.bodyWeightPoints(), { color: "#14B8A6", fmt: v => v.toFixed(1) })}` : ""}
       ${weights.slice(0,6).map(w => `<div class="exline"><div class="grow">${dateFR(w.date)}</div><b>${w.weightKg} kg</b></div>`).join("")}</div>`;
@@ -150,6 +176,7 @@ function renderProgress() {
       <div class="sub">${dateFR(s.date, {weekday:"short",day:"numeric",month:"short",hour:"2-digit",minute:"2-digit"})}</div></div>
       <div class="sub">${s.sets.filter(x=>!x.isWarmup).length} séries · ${Math.round(s.totalVolume||0)} kg ›</div></div>`).join("") || `<p class="muted">Pas encore de séance.</p>`;
   return `<header class="head"><h1>Progression</h1></header><div class="scroll">
+    <h2>Calendrier</h2>${monthCalendar()}
     <h2>Courbes</h2>${chartBlock}${bwBlock}<h2>Séances réalisées</h2>${list}<div class="pad"></div></div>`;
 }
 
@@ -166,7 +193,9 @@ function renderProfil() {
     <div class="card col"><div class="title">Réglages</div>
       <label class="rowline"><span class="grow">Repos par défaut (nouveaux exos)</span>
         <select id="defrest" class="field auto">${[45,60,75,90,120,150].map(v=>`<option ${store.getSetting("defaultRest")===v?"selected":""}>${v}</option>`).join("")}</select> s</label>
-      <label class="rowline"><input type="checkbox" id="notify" ${store.getSetting("notify")?"checked":""}/> Notification à la fin du repos</label></div>
+      <label class="rowline"><input type="checkbox" id="notify" ${store.getSetting("notify")?"checked":""}/> Notification à la fin du repos</label>
+      <label class="rowline"><input type="checkbox" id="vibrate" ${store.getSetting("vibrate")!==false?"checked":""}/> Vibration à la fin du repos</label>
+      <p class="sub">L'app garde l'écran allumé pendant la séance. iOS ne permet pas d'alerter quand l'app est totalement en arrière-plan : reste sur Muscu (ou écran verrouillé) pour sentir la vibration.</p></div>
     <div class="card col"><div class="title">À propos</div><p class="sub">Muscu — PWA. Ajoute-la à l'écran d'accueil. 💪</p></div>
     <div class="pad"></div></div>`;
 }
@@ -232,14 +261,14 @@ function beginWorkout() {
   if (fi > 0) order.unshift(order.splice(fi, 1)[0]);
   state.live = { routineId: r.id, routineName: r.name, color: r.color, startAt: Date.now(), exercises: order.map(buildLiveExercise) };
   state.screen = "live";
-  clearInterval(restTimer); render();
+  clearInterval(restTimer); requestWakeLock(); render();
   clearInterval(sessionTimer);
   sessionTimer = setInterval(() => { const e = $("#elapsed"); if (e) e.textContent = fmtClock(Math.floor((Date.now() - state.live.startAt) / 1000)); }, 1000);
 }
 function liveStats() {
   const all = state.live.exercises.flatMap(e => e.sets).filter(s => !s.isWarmup);
   const done = all.filter(s => s.done);
-  return { done: done.length, total: all.length, vol: Math.round(done.reduce((a, s) => a + s.weight * s.reps, 0)) };
+  return { done: done.length, total: all.length, vol: Math.round(done.reduce((a, s) => a + numW(s.weight) * (+s.reps || 0), 0)) };
 }
 function isSupersetTop(list, i) {
   const g = list[i].superset; if (!g) return false;
@@ -247,6 +276,9 @@ function isSupersetTop(list, i) {
 }
 function renderLive() {
   const L = state.live, st = liveStats();
+  const scOld = app.querySelector(".scroll");
+  const prevScroll = scOld ? scOld.scrollTop : 0;                       // ne pas remonter en haut quand on valide une série
+  const prevBannerH = app.querySelector(".restbanner")?.offsetHeight || 0;
   app.innerHTML = `<header class="head live" style="border-color:${L.color}">
       <button class="link danger" data-action="cancel-live">Annuler</button><h1>${L.routineName}</h1><button class="link strong" data-action="finish">Terminer</button></header>
     ${rest.running ? renderRestBanner() : ""}
@@ -261,14 +293,18 @@ function renderLive() {
           ${e.lastSummary ? `<div class="note">${e.lastSummary}</div>` : ""}${e.notes ? `<div class="note">📝 ${e.notes}</div>` : ""}
           <div class="setgrid head"><span>Série</span><span>kg</span><span>Reps</span><span>RPE</span><span>✓</span></div>
           ${e.sets.map((s, si) => `<div class="setgrid ${s.done?"done":""}">
-            <span class="${s.isWarmup?"warm":""}">${s.isWarmup?"Éch":s.setIndex}</span>
-            <input class="field" type="number" inputmode="decimal" value="${s.weight}" data-f="weight" data-ei="${ei}" data-si="${si}"/>
+            <span class="${s.isWarmup?"warm":s.drop?"drop":""}">${s.isWarmup?"Éch":s.drop?"↘":s.setIndex}</span>
+            <input class="field" type="text" inputmode="decimal" value="${s.weight}" data-f="weight" data-ei="${ei}" data-si="${si}"/>
             <input class="field" type="number" inputmode="numeric" value="${s.reps}" data-f="reps" data-ei="${ei}" data-si="${si}"/>
             <select class="field rpe" data-f="rpe" data-ei="${ei}" data-si="${si}"><option value="">–</option>${RPES.map(v=>`<option ${s.rpe==v?"selected":""}>${v}</option>`).join("")}</select>
             <button class="check ${s.done?"on":""}" data-action="toggle" data-ei="${ei}" data-si="${si}">${s.done?"✓":"○"}</button></div>`).join("")}
-          <button class="btn ghost" data-action="addset" data-ei="${ei}">+ série</button></div>`).join("")}
+          <div class="rowline" style="gap:8px;margin-top:6px">
+            <button class="btn ghost" style="margin-top:0;flex:1" data-action="addset" data-ei="${ei}">+ série</button>
+            <button class="btn ghost" style="margin-top:0;flex:1" data-action="dropset" data-ei="${ei}">↘ dégressif</button></div></div>`).join("")}
       <button class="btn" data-action="add-ex" style="width:100%">+ Ajouter un exercice</button>
       <button class="btn primary big" data-action="finish">Terminer la séance</button><div class="pad"></div></div>`;
+  const sc = app.querySelector(".scroll");
+  if (sc) { const dH = (app.querySelector(".restbanner")?.offsetHeight || 0) - prevBannerH; sc.scrollTop = Math.max(0, prevScroll + dH); } // compense l'apparition/disparition du bandeau de repos (hors .scroll)
   renderTabbar();
 }
 function renderRestBanner() {
@@ -277,20 +313,50 @@ function renderRestBanner() {
     <div class="rowline"><button class="btn sm" data-action="rest-add">+15s</button><button class="btn sm" data-action="rest-sub">−15s</button><button class="btn sm" data-action="rest-skip">Passer</button></div></div>`;
 }
 function startRest(seconds) {
-  clearInterval(restTimer);
+  clearInterval(restTimer); primeAudio();
   rest = { running: true, remaining: seconds, total: seconds, endAt: Date.now() + seconds * 1000 }; render();
   restTimer = setInterval(() => {
     rest.remaining = Math.max(0, Math.ceil((rest.endAt - Date.now()) / 1000));
     const rt = $("#resttime"), rf = $("#restfill");
     if (rt) rt.textContent = fmtClock(rest.remaining);
     if (rf) rf.style.width = `${rest.total ? (1 - rest.remaining / rest.total) * 100 : 0}%`;
-    if (rest.remaining <= 0) { clearInterval(restTimer); rest.running = false; navigator.vibrate && navigator.vibrate(200); notifyRest(); render(); }
+    if (rest.remaining <= 0) { clearInterval(restTimer); rest.running = false; alertRestDone(); render(); }
   }, 250);
 }
-function notifyRest() {
-  if (store.getSetting("notify") && "Notification" in window && Notification.permission === "granted")
-    try { new Notification("Repos terminé 💪", { body: "Série suivante !" }); } catch (e) {}
+// Alerte de fin de repos : vibration forte + son + notification (selon réglages).
+function alertRestDone() {
+  if (store.getSetting("vibrate") !== false && navigator.vibrate) navigator.vibrate([500, 200, 500, 200, 700]);
+  primeAudio(); playBeep();
+  notifyRest();
 }
+function notifyRest() {
+  if (!store.getSetting("notify") || !("Notification" in window) || Notification.permission !== "granted") return;
+  const opts = { body: "Reprends ta série 💪", tag: "muscu-rest", renotify: true, vibrate: [400, 150, 400], icon: "./icons/icon-192.png", badge: "./icons/icon-192.png" };
+  try {
+    if (navigator.serviceWorker && navigator.serviceWorker.ready)
+      navigator.serviceWorker.ready.then(reg => reg.showNotification("Repos terminé 💪", opts)).catch(() => { try { new Notification("Repos terminé 💪", opts); } catch (e) {} });
+    else new Notification("Repos terminé 💪", opts);
+  } catch (e) {}
+}
+// WebAudio : bip court (amorcé au clic qui lance le repos → autorisé par iOS).
+function primeAudio() { try { if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)(); if (audioCtx.state === "suspended") audioCtx.resume(); } catch (e) {} }
+function playBeep() {
+  try {
+    if (!audioCtx) return;
+    const o = audioCtx.createOscillator(), g = audioCtx.createGain();
+    o.connect(g); g.connect(audioCtx.destination); o.type = "sine"; o.frequency.value = 880; g.gain.value = 0.12;
+    o.start(); setTimeout(() => { o.frequency.value = 660; }, 160); setTimeout(() => { o.stop(); }, 340);
+  } catch (e) {}
+}
+// Verrou d'écran : garde l'écran allumé pendant la séance (timer fiable au premier plan).
+async function requestWakeLock() {
+  try {
+    if (!("wakeLock" in navigator)) return;
+    wakeLock = await navigator.wakeLock.request("screen");
+    wakeLock.addEventListener("release", () => { wakeLock = null; if (state.screen === "live" && document.visibilityState === "visible") requestWakeLock(); });
+  } catch (e) {}
+}
+function releaseWakeLock() { try { if (wakeLock) { wakeLock.release(); wakeLock = null; } } catch (e) {} }
 function refreshLiveStats() { const st = liveStats(); const a = $("#setcount"), b = $("#vol"); if (a) a.textContent = `${st.done}/${st.total}`; if (b) b.textContent = st.vol; }
 function finishWorkout() {
   const L = state.live;
@@ -309,17 +375,17 @@ function showFinishModal() {
 function saveSession(sessionRPE) {
   const L = state.live; const sets = []; let order = 0;
   L.exercises.forEach(e => e.sets.filter(s => s.done).forEach(s =>
-    sets.push({ exerciseName: e.name, order: order++, setIndex: s.setIndex, weight: +s.weight, reps: +s.reps, rpe: s.rpe ? +s.rpe : null, isWarmup: s.isWarmup })));
+    sets.push({ exerciseName: e.name, order: order++, setIndex: s.setIndex, weight: numW(s.weight), reps: +s.reps || 0, rpe: s.rpe ? +s.rpe : null, isWarmup: s.isWarmup, drop: !!s.drop })));
   const totalVolume = sets.filter(s => !s.isWarmup).reduce((a, s) => a + s.weight * s.reps, 0);
   store.addSession({ id: store.uid(), date: new Date(L.startAt).toISOString(), endDate: new Date().toISOString(),
-    routineId: L.routineId, routineName: L.routineName, sessionRPE: sessionRPE || null, totalVolume, sets });
+    routineId: L.routineId, routineName: L.routineName, color: L.color, sessionRPE: sessionRPE || null, totalVolume, sets });
   document.querySelector(".modal")?.remove();
-  clearInterval(sessionTimer); clearInterval(restTimer); rest.running = false;
+  clearInterval(sessionTimer); clearInterval(restTimer); rest.running = false; releaseWakeLock();
   state.screen = "home"; state.tab = "home"; state.live = null; render();
   toast("Séance enregistrée 💪");
   if (store.getSetting("remindBackup")) setTimeout(() => { if (confirm("Sauvegarder tes données dans iCloud maintenant ?")) doExport(); }, 700);
 }
-function cancelLive() { clearInterval(sessionTimer); clearInterval(restTimer); rest.running = false; state.screen = "home"; state.live = null; render(); }
+function cancelLive() { clearInterval(sessionTimer); clearInterval(restTimer); rest.running = false; releaseWakeLock(); state.screen = "home"; state.live = null; render(); }
 
 // ---------- SESSION DETAIL ----------
 function showSession(id) {
@@ -333,7 +399,7 @@ function showSession(id) {
       <button class="link" data-action="edit-session" data-id="${s.id}">Modifier</button>
       <button class="link strong" data-action="close-modal">Fermer</button></div>
     <div class="sub">${s.sets.filter(x=>!x.isWarmup).length} séries · ${Math.round(s.totalVolume||0)} kg de volume</div>
-    ${Object.entries(byEx).map(([n, sets]) => `<h3>${n}</h3>${sets.map(x => `<div class="exline"><span class="${x.isWarmup?"warm":""}" style="width:42px">${x.isWarmup?"Éch":x.setIndex}</span><div class="grow">${fmtNum(x.weight)} kg × ${x.reps}${x.rpe?` · RPE ${x.rpe}`:""}</div></div>`).join("")}`).join("")}
+    ${Object.entries(byEx).map(([n, sets]) => `<h3>${n}</h3>${sets.map(x => `<div class="exline"><span class="${x.isWarmup?"warm":x.drop?"drop":""}" style="width:42px">${x.isWarmup?"Éch":x.drop?"↘":x.setIndex}</span><div class="grow">${fmtNum(x.weight)} kg × ${x.reps}${x.rpe?` · RPE ${x.rpe}`:""}</div></div>`).join("")}`).join("")}
     <button class="btn big" data-action="del-session" data-id="${s.id}" style="background:#3a1d1d;color:#ff6a6a">Supprimer cette séance</button></div>`;
   document.body.appendChild(m);
 }
@@ -343,7 +409,7 @@ function openSessionEdit(id) {
   const s = store.getSession(id); if (!s) return;
   document.querySelector(".modal")?.remove();
   const order = [], map = {};
-  s.sets.forEach(x => { if (!map[x.exerciseName]) { map[x.exerciseName] = []; order.push(x.exerciseName); } map[x.exerciseName].push({ weight: x.weight, reps: x.reps, rpe: x.rpe, isWarmup: !!x.isWarmup }); });
+  s.sets.forEach(x => { if (!map[x.exerciseName]) { map[x.exerciseName] = []; order.push(x.exerciseName); } map[x.exerciseName].push({ weight: x.weight, reps: x.reps, rpe: x.rpe, isWarmup: !!x.isWarmup, drop: !!x.drop }); });
   state.sessionEdit = { id, date: s.date, routineName: s.routineName, sessionRPE: s.sessionRPE || null, groups: order.map(n => ({ name: n, sets: map[n] })) };
   state.screen = "editsession"; render();
 }
@@ -355,8 +421,8 @@ function renderSessionEdit() {
       <p class="sub">${se.routineName} · ${dateFR(se.date,{weekday:"long",day:"numeric",month:"long"})}</p>
       ${se.groups.map((g, gi) => `<div class="card col"><div class="title">${g.name}</div>
         ${g.sets.map((s, si) => `<div class="seteditrow">
-          <span class="lbl ${s.isWarmup?"warm":""}" data-action="se-warm" data-gi="${gi}" data-si="${si}">${s.isWarmup?"Éch":si+1}</span>
-          <input class="field" type="number" inputmode="decimal" value="${s.weight}" data-sef="weight" data-gi="${gi}" data-si="${si}" placeholder="kg"/>
+          <span class="lbl ${s.isWarmup?"warm":s.drop?"drop":""}" data-action="se-warm" data-gi="${gi}" data-si="${si}">${s.isWarmup?"Éch":s.drop?"↘":si+1}</span>
+          <input class="field" type="text" inputmode="decimal" value="${s.weight}" data-sef="weight" data-gi="${gi}" data-si="${si}" placeholder="kg"/>
           <input class="field" type="number" inputmode="numeric" value="${s.reps}" data-sef="reps" data-gi="${gi}" data-si="${si}" placeholder="reps"/>
           <select class="field rpe" data-sef="rpe" data-gi="${gi}" data-si="${si}"><option value="">–</option>${RPES.map(v=>`<option ${s.rpe==v?"selected":""}>${v}</option>`).join("")}</select>
           <span class="acts"><button class="info" data-action="se-up" data-gi="${gi}" data-si="${si}">↑</button>
@@ -375,7 +441,7 @@ function saveSessionEdit() {
   se.groups.filter(g => g.sets.length).forEach(g => {
     let work = 0;
     g.sets.forEach(s => sets.push({ exerciseName: g.name, order: order++, setIndex: s.isWarmup ? 0 : (++work),
-      weight: +s.weight || 0, reps: +s.reps || 0, rpe: s.rpe ? +s.rpe : null, isWarmup: !!s.isWarmup }));
+      weight: numW(s.weight), reps: +s.reps || 0, rpe: s.rpe ? +s.rpe : null, isWarmup: !!s.isWarmup, drop: !!s.drop }));
   });
   store.updateSession(se.id, { sessionRPE: se.sessionRPE || null, sets });
   state.screen = "home"; state.tab = "progress"; state.sessionEdit = null; render(); toast("Séance modifiée");
@@ -432,7 +498,7 @@ let pickerCb = null;
 // dans Fichiers"), blob: sur desktop/Android (pas de limite de taille). cf. w3c/web-share#201.
 function doExport() {
   const text = store.exportJSON();
-  const filename = "muscu-sauvegarde.json";
+  const filename = `muscu-sauvegarde-${new Date().toISOString().slice(0, 10)}.json`;
   const ua = navigator.userAgent || "";
   const iOSLike = /iPad|iPhone|iPod/.test(ua) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
   const a = document.createElement("a");
@@ -447,7 +513,7 @@ function doExport() {
   document.body.appendChild(a); a.click(); document.body.removeChild(a);
   if (objUrl) setTimeout(() => URL.revokeObjectURL(objUrl), 1500);
   store.setSetting("lastBackup", new Date().toISOString());
-  toast(iOSLike ? "Aperçu ouvert → « Enregistrer dans Fichiers » → iCloud Drive" : "Sauvegarde exportée (muscu-sauvegarde.json)");
+  toast(iOSLike ? "Aperçu ouvert → « Enregistrer dans Fichiers » → iCloud Drive" : `Sauvegarde exportée (${filename})`);
 }
 function doImport(file) { const r = new FileReader(); r.onload = () => { try { const res = store.importJSON(r.result); toast(`Importé : ${res.sessions} séances, ${res.weights} pesées`); render(); } catch (e) { toast("Fichier invalide"); } }; r.readAsText(file); }
 
@@ -478,8 +544,9 @@ document.addEventListener("click", e => {
   if (a === "pickfirst") { state.warmup.firstEx = el.dataset.ex; return renderWarmup(); }
   if (a === "begin") return beginWorkout();
   // live
-  if (a === "toggle") { const s = state.live.exercises[ei].sets[si]; s.done = !s.done; if (s.done && !s.isWarmup) startRest(state.live.exercises[ei].rest); else render(); refreshLiveStats(); return; }
-  if (a === "addset") { const ex = state.live.exercises[ei]; const work = ex.sets.filter(s => !s.isWarmup); const last = ex.sets[ex.sets.length - 1]; ex.sets.push({ setIndex: work.length + 1, weight: last?.weight || 0, reps: last?.reps || ex.repHigh, rpe: null, isWarmup: false, done: false }); return render(); }
+  if (a === "toggle") { const ex = state.live.exercises[ei], s = ex.sets[si]; s.done = !s.done; const next = ex.sets[si + 1]; const skipRest = next && next.drop && !next.done; if (s.done && !s.isWarmup && !skipRest) startRest(ex.rest); else render(); refreshLiveStats(); return; }
+  if (a === "addset") { const ex = state.live.exercises[ei]; const work = ex.sets.filter(s => !s.isWarmup && !s.drop); const last = ex.sets[ex.sets.length - 1]; ex.sets.push({ setIndex: work.length + 1, weight: last?.weight || 0, reps: last?.reps || ex.repHigh, rpe: null, isWarmup: false, done: false }); return render(); }
+  if (a === "dropset") { const ex = state.live.exercises[ei]; const lastWork = [...ex.sets].reverse().find(s => !s.isWarmup); const base = numW(lastWork ? lastWork.weight : 0); const idx = ex.sets.filter(s => !s.isWarmup && !s.drop).length + 1; ex.sets.push({ setIndex: idx, weight: Math.round(base * 0.8 * 2) / 2, reps: ex.repHigh, rpe: null, isWarmup: false, drop: true, done: false }); clearInterval(restTimer); rest.running = false; return render(); }
   if (a === "del-ex") { if (state.live.exercises.length > 1) state.live.exercises.splice(ei, 1); return render(); }
   if (a === "add-ex") return showPicker(id => { const x = exOf(id); state.live.exercises.push({ ex: id, name: x.name, rest: store.getSetting("defaultRest"), repLow: 8, repHigh: 12, superset: null, notes: "", lastSummary: store.lastSetsFor(x.name).length?"Dernière fois : "+store.lastSetsFor(x.name).map(s=>`${fmtNum(s.weight)}×${s.reps}`).join("  "):"", sets: [1,2,3,4].map(n => ({ setIndex: n, weight: store.lastSetsFor(x.name)[0]?.weight||0, reps: 12, rpe: null, isWarmup: false, done: false })) }); document.querySelector(".modal")?.remove(); render(); });
   if (a === "rest-add") { rest.endAt += 15000; rest.total += 15; return; }
@@ -489,7 +556,9 @@ document.addEventListener("click", e => {
   if (a === "save-session") { saveSession(el.dataset.rpe ? +el.dataset.rpe : null); return; }
   if (a === "cancel-live") { if (confirm("Annuler la séance ? Les séries non enregistrées seront perdues.")) cancelLive(); return; }
   // progression / profil
-  if (a === "addbw") { const v = parseFloat($("#bw").value); if (v > 0) { store.addBodyWeight(v); render(); } return; }
+  if (a === "cal-prev") { state.calOffset = (state.calOffset || 0) - 1; return render(); }
+  if (a === "cal-next") { if ((state.calOffset || 0) < 0) state.calOffset++; return render(); }
+  if (a === "addbw") { const v = numW($("#bw").value); if (v > 0) { store.addBodyWeight(v); render(); } return; }
   if (a === "export") return doExport();
   if (a === "import") return $("#importfile").click();
   // exos / routines perso
@@ -510,11 +579,11 @@ document.addEventListener("click", e => {
 // ---------- events: input/change ----------
 document.addEventListener("input", e => {
   const f = e.target.closest("[data-f]");
-  if (f && state.live) { state.live.exercises[+f.dataset.ei].sets[+f.dataset.si][f.dataset.f] = f.dataset.f === "rpe" ? (e.target.value ? +e.target.value : null) : e.target.value; return; }
+  if (f && state.live) { const k = f.dataset.f; state.live.exercises[+f.dataset.ei].sets[+f.dataset.si][k] = k === "rpe" ? (e.target.value ? +e.target.value : null) : (k === "weight" ? e.target.value.replace(",", ".") : e.target.value); return; }
   const ef = e.target.closest("[data-ef]");
   if (ef && state.editor) { state.editor.exercises[+ef.dataset.i][ef.dataset.ef] = +e.target.value || 0; return; }
   const sef = e.target.closest("[data-sef]");
-  if (sef && state.sessionEdit) { const s = state.sessionEdit.groups[+sef.dataset.gi].sets[+sef.dataset.si]; s[sef.dataset.sef] = sef.dataset.sef === "rpe" ? (e.target.value ? +e.target.value : null) : e.target.value; return; }
+  if (sef && state.sessionEdit) { const k = sef.dataset.sef; const s = state.sessionEdit.groups[+sef.dataset.gi].sets[+sef.dataset.si]; s[k] = k === "rpe" ? (e.target.value ? +e.target.value : null) : (k === "weight" ? e.target.value.replace(",", ".") : e.target.value); return; }
   if (e.target.id === "pickerq") { const q = e.target.value.toLowerCase(); document.querySelectorAll("#pickerlist .pickrow").forEach(r => r.style.display = r.dataset.name.includes(q) ? "" : "none"); return; }
 });
 document.addEventListener("change", e => {
@@ -524,6 +593,17 @@ document.addEventListener("change", e => {
   if (e.target.id === "remind") store.setSetting("remindBackup", e.target.checked);
   if (e.target.id === "defrest") store.setSetting("defaultRest", +e.target.value);
   if (e.target.id === "notify") { store.setSetting("notify", e.target.checked); if (e.target.checked && "Notification" in window && Notification.permission !== "granted") Notification.requestPermission(); }
+  if (e.target.id === "vibrate") store.setSetting("vibrate", e.target.checked);
+});
+// Retour au premier plan : ré-acquiert le verrou d'écran et rattrape un repos terminé pendant l'absence.
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState !== "visible") return;
+  if (state.screen === "live") requestWakeLock();
+  if (rest.running) {
+    rest.remaining = Math.max(0, Math.ceil((rest.endAt - Date.now()) / 1000));
+    if (rest.remaining <= 0) { clearInterval(restTimer); rest.running = false; alertRestDone(); }
+    render();
+  }
 });
 // éditeur : nom/résumé (au blur/changement)
 document.addEventListener("input", e => {

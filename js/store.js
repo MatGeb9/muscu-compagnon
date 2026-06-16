@@ -11,7 +11,7 @@ const DEFAULT = () => ({
   bodyWeights: [],         // { id, date, weightKg }
   customExercises: {},     // id -> { name, group, equipment, instructions, cues, mistakes, custom:true }
   customRoutines: [],      // { id, name, color, summary, exercises:[...], custom:true }
-  settings: { lastBackup: null, remindBackup: true, defaultRest: 90, notify: false },
+  settings: { lastBackup: null, remindBackup: true, defaultRest: 90, notify: false, vibrate: true },
 });
 
 let cache = null;
@@ -71,7 +71,7 @@ export function updateSession(id, patch) {
 // --- Suivi intelligent ---
 export function lastSetsFor(name) {
   for (const s of load().sessions) {
-    const sets = (s.sets || []).filter(x => x.exerciseName === name && !x.isWarmup);
+    const sets = (s.sets || []).filter(x => x.exerciseName === name && !x.isWarmup && !x.drop); // exclut échauffement ET dégressifs (sinon ils polluent pré-remplissage/suggestion)
     if (sets.length) return sets.slice().sort((a, b) => a.setIndex - b.setIndex);
   }
   return [];
