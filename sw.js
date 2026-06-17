@@ -1,7 +1,7 @@
 // Service worker — cache + auto-update (stale-while-revalidate).
 // Sert le cache instantanément (marche hors-ligne) ET récupère la version fraîche
 // en arrière-plan → la mise à jour apparaît au rechargement suivant, sans bump manuel.
-const CACHE = "muscu-v6";
+const CACHE = "muscu-v7";
 const ASSETS = [
   "./", "./index.html",
   "./css/styles.css",

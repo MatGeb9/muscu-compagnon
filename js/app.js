@@ -195,7 +195,7 @@ function renderProfil() {
         <select id="defrest" class="field auto">${[45,60,75,90,120,150].map(v=>`<option ${store.getSetting("defaultRest")===v?"selected":""}>${v}</option>`).join("")}</select> s</label>
       <label class="rowline"><input type="checkbox" id="notify" ${store.getSetting("notify")?"checked":""}/> Notification à la fin du repos</label>
       <label class="rowline"><input type="checkbox" id="vibrate" ${store.getSetting("vibrate")!==false?"checked":""}/> Vibration à la fin du repos</label>
-      <p class="sub">L'app garde l'écran allumé pendant la séance. iOS ne permet pas d'alerter quand l'app est totalement en arrière-plan : reste sur Muscu (ou écran verrouillé) pour sentir la vibration.</p></div>
+      <p class="sub">Un <b>bip</b> sonne toujours à la fin du repos — c'est le signal fiable sur iPhone. La <b>vibration</b>, elle, dépend de l'appareil : Android la gère ; sur iOS, Safari ne l'expose pas vraiment et iOS&nbsp;26.5+ l'a encore restreinte → fie-toi alors au bip. L'app garde l'écran allumé ; iOS ne peut pas alerter en arrière-plan total, reste sur Muscu (ou écran verrouillé).</p></div>
     <div class="card col"><div class="title">À propos</div><p class="sub">Muscu — PWA. Ajoute-la à l'écran d'accueil. 💪</p></div>
     <div class="pad"></div></div>`;
 }
@@ -323,11 +323,38 @@ function startRest(seconds) {
     if (rest.remaining <= 0) { clearInterval(restTimer); rest.running = false; alertRestDone(); render(); }
   }, 250);
 }
-// Alerte de fin de repos : vibration forte + son + notification (selon réglages).
+// Alerte de fin de repos : vibration (selon plateforme) + bip + notification (selon réglages).
 function alertRestDone() {
-  if (store.getSetting("vibrate") !== false && navigator.vibrate) navigator.vibrate([500, 200, 500, 200, 700]);
+  if (store.getSetting("vibrate") !== false) haptic([500, 200, 500, 200, 700]);
   primeAudio(); playBeep();
   notifyRest();
+}
+// Vibration multi-plateforme.
+//  • Android : Vibration API (navigator.vibrate, motifs supportés).
+//  • iOS : navigator.vibrate N'EXISTE PAS dans Safari/WebKit. Seul contournement = le "truc du
+//    switch" (input type=checkbox switch + label.click) qui déclenche un haptic natif.
+//    ⚠️ Marche uniquement iOS 17.4 → 26.4 : Apple a supprimé ce déclenchement programmatique en
+//    iOS 26.5. Sur iOS récent le BIP reste le signal fiable (cf. texte des réglages). C'est sans
+//    risque : si rien ne se déclenche, on ne fait que créer/cliquer un input invisible.
+let _hapticSwitch = null;
+function iosHapticTap() {
+  try {
+    if (!_hapticSwitch) {
+      const label = document.createElement("label");
+      label.setAttribute("aria-hidden", "true");
+      label.style.cssText = "position:absolute;left:-9999px;width:0;height:0;overflow:hidden;opacity:0;pointer-events:none";
+      const cb = document.createElement("input");
+      cb.type = "checkbox"; cb.setAttribute("switch", ""); cb.tabIndex = -1;
+      label.appendChild(cb); document.body.appendChild(label); _hapticSwitch = label;
+    }
+    _hapticSwitch.click(); // toggle le switch → haptic iOS 17.4–26.4
+  } catch (e) {}
+}
+function haptic(pattern) {
+  try { if (navigator.vibrate) { navigator.vibrate(pattern); return; } } catch (e) {}
+  // Fallback iOS : quelques tapes rapprochées pour rendre l'alerte perceptible.
+  const n = Array.isArray(pattern) ? Math.min(3, Math.ceil(pattern.length / 2)) : 1;
+  for (let i = 0; i < n; i++) setTimeout(iosHapticTap, i * 140);
 }
 function notifyRest() {
   if (!store.getSetting("notify") || !("Notification" in window) || Notification.permission !== "granted") return;
