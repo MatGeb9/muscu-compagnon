@@ -13,6 +13,8 @@ let wakeLock = null, audioCtx = null;
 // ---------- utils ----------
 const fmtClock = s => `${Math.floor(s / 60)}:${String(Math.max(0, s % 60)).padStart(2, "0")}`;
 const exOf = id => store.getExercise(id);
+// Profil séries/repos d'un exo : valeurs saisies à la création (perso) sinon repli sur le réglage global.
+const exDefaults = id => { const x = exOf(id); return { sets: x.defaultSets || 4, rest: x.defaultRest || store.getSetting("defaultRest") || 90 }; };
 const fmtNum = n => (Math.round(n * 100) / 100).toString();
 const numW = v => parseFloat(String(v).replace(",", ".")) || 0; // tolère la virgule décimale (clavier FR)
 const dateFR = (d, o) => new Date(d).toLocaleDateString("fr-FR", o || { weekday: "short", day: "numeric", month: "short" });
@@ -575,7 +577,7 @@ document.addEventListener("click", e => {
   if (a === "addset") { const ex = state.live.exercises[ei]; const work = ex.sets.filter(s => !s.isWarmup && !s.drop); const last = ex.sets[ex.sets.length - 1]; ex.sets.push({ setIndex: work.length + 1, weight: last?.weight || 0, reps: last?.reps || ex.repHigh, rpe: null, isWarmup: false, done: false }); return render(); }
   if (a === "dropset") { const ex = state.live.exercises[ei]; const lastWork = [...ex.sets].reverse().find(s => !s.isWarmup); const base = numW(lastWork ? lastWork.weight : 0); const idx = ex.sets.filter(s => !s.isWarmup && !s.drop).length + 1; ex.sets.push({ setIndex: idx, weight: Math.round(base * 0.8 * 2) / 2, reps: ex.repHigh, rpe: null, isWarmup: false, drop: true, done: false }); clearInterval(restTimer); rest.running = false; return render(); }
   if (a === "del-ex") { if (state.live.exercises.length > 1) state.live.exercises.splice(ei, 1); return render(); }
-  if (a === "add-ex") return showPicker(id => { const x = exOf(id); state.live.exercises.push({ ex: id, name: x.name, rest: store.getSetting("defaultRest"), repLow: 8, repHigh: 12, superset: null, notes: "", lastSummary: store.lastSetsFor(x.name).length?"Dernière fois : "+store.lastSetsFor(x.name).map(s=>`${fmtNum(s.weight)}×${s.reps}`).join("  "):"", sets: [1,2,3,4].map(n => ({ setIndex: n, weight: store.lastSetsFor(x.name)[0]?.weight||0, reps: 12, rpe: null, isWarmup: false, done: false })) }); document.querySelector(".modal")?.remove(); render(); });
+  if (a === "add-ex") return showPicker(id => { const x = exOf(id), dft = exDefaults(id), last = store.lastSetsFor(x.name); state.live.exercises.push({ ex: id, name: x.name, rest: dft.rest, repLow: 8, repHigh: 12, superset: null, notes: "", lastSummary: last.length?"Dernière fois : "+last.map(s=>`${fmtNum(s.weight)}×${s.reps}`).join("  "):"", sets: Array.from({length: dft.sets}, (_, k) => ({ setIndex: k+1, weight: last[0]?.weight||0, reps: 12, rpe: null, isWarmup: false, done: false })) }); document.querySelector(".modal")?.remove(); render(); });
   if (a === "rest-add") { rest.endAt += 15000; rest.total += 15; return; }
   if (a === "rest-sub") { rest.endAt = Math.max(Date.now(), rest.endAt - 15000); return; }
   if (a === "rest-skip") { clearInterval(restTimer); rest.running = false; return render(); }
@@ -597,7 +599,7 @@ document.addEventListener("click", e => {
   if (a === "ed-del") { state.editor.exercises.splice(i, 1); return renderEditor(); }
   if (a === "ed-up") { if (i > 0) { const ex = state.editor.exercises; [ex[i-1], ex[i]] = [ex[i], ex[i-1]]; } return renderEditor(); }
   if (a === "ed-down") { const ex = state.editor.exercises; if (i < ex.length - 1) { [ex[i+1], ex[i]] = [ex[i], ex[i+1]]; } return renderEditor(); }
-  if (a === "ed-addex") return showPicker(id => { state.editor.exercises.push({ ex: id, sets: 4, repLow: 8, repHigh: 12, rest: store.getSetting("defaultRest"), ladder: [], notes: "" }); document.querySelector(".modal")?.remove(); renderEditor(); });
+  if (a === "ed-addex") return showPicker(id => { const dft = exDefaults(id); state.editor.exercises.push({ ex: id, sets: dft.sets, repLow: 8, repHigh: 12, rest: dft.rest, ladder: [], notes: "" }); document.querySelector(".modal")?.remove(); renderEditor(); });
   if (a === "save-routine") return saveRoutine();
   if (a === "del-routine") { if (confirm("Supprimer cette séance perso ?")) { store.deleteRoutine(el.dataset.id); state.screen = "home"; state.tab = "programmes"; state.editor = null; render(); } return; }
   // picker
@@ -654,6 +656,9 @@ function showExerciseEditor() {
     <label class="sub">Nom</label><input id="nx-name" class="field" style="text-align:left"/>
     <div class="rowline"><label class="sub grow">Muscle<select id="nx-group" class="field">${groups.map(g=>`<option>${g}</option>`).join("")}</select></label>
       <label class="sub grow">Matériel<select id="nx-eq" class="field">${equips.map(g=>`<option>${g}</option>`).join("")}</select></label></div>
+    <div class="rowline"><label class="sub grow">Séries<input id="nx-sets" class="field" type="number" inputmode="numeric" value="4" min="1" max="12"/></label>
+      <label class="sub grow">Repos (s)<input id="nx-rest" class="field" type="number" inputmode="numeric" value="${store.getSetting("defaultRest")||90}" min="15" step="15"/></label></div>
+    <p class="sub">Ces valeurs seront appliquées automatiquement quand tu ajoutes cet exo à une séance.</p>
     <label class="sub">Conseils (exécution)</label><textarea id="nx-ins" class="field" style="text-align:left;height:80px"></textarea>
     <button class="btn primary big" data-action="save-exercise">Créer</button></div>`;
   document.body.appendChild(m);
@@ -661,8 +666,10 @@ function showExerciseEditor() {
 document.addEventListener("click", e => {
   if (e.target.closest('[data-action="save-exercise"]')) {
     const name = $("#nx-name").value.trim(); if (!name) { toast("Nom requis"); return; }
-    store.addCustomExercise({ name, group: $("#nx-group").value, equipment: $("#nx-eq").value, instructions: $("#nx-ins").value.trim() });
-    document.querySelector(".modal")?.remove(); render(); toast("Exercice créé");
+    const sets = Math.max(1, Math.min(12, parseInt($("#nx-sets").value, 10) || 4));
+    const rest = Math.max(15, parseInt($("#nx-rest").value, 10) || (store.getSetting("defaultRest") || 90));
+    store.addCustomExercise({ name, group: $("#nx-group").value, equipment: $("#nx-eq").value, instructions: $("#nx-ins").value.trim(), defaultSets: sets, defaultRest: rest });
+    document.querySelector(".modal")?.remove(); render(); toast(`Exercice créé (${sets} séries · repos ${rest}s)`);
   }
 });
 

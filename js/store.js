@@ -33,7 +33,8 @@ export function getExercise(id) { return allExercises()[id] || { name: id, group
 export function addCustomExercise(o) {
   const d = load(); const id = "c_" + uid();
   d.customExercises[id] = { name: o.name, group: o.group || "Corps entier", equipment: o.equipment || "Autre",
-    instructions: o.instructions || "", cues: o.cues || [], mistakes: o.mistakes || [], custom: true };
+    instructions: o.instructions || "", cues: o.cues || [], mistakes: o.mistakes || [],
+    defaultSets: o.defaultSets || null, defaultRest: o.defaultRest || null, custom: true };
   save(); return id;
 }
 
