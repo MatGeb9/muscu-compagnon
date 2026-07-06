@@ -412,7 +412,7 @@ function saveSession(sessionRPE) {
   clearInterval(sessionTimer); clearInterval(restTimer); rest.running = false; releaseWakeLock();
   state.screen = "home"; state.tab = "home"; state.live = null; render();
   toast("Séance enregistrée 💪");
-  if (store.getSetting("remindBackup")) setTimeout(() => { if (confirm("Sauvegarder tes données dans iCloud maintenant ?")) doExport(); }, 700);
+  if (store.getSetting("remindBackup")) setTimeout(showBackupReminder, 700);
 }
 function cancelLive() { clearInterval(sessionTimer); clearInterval(restTimer); rest.running = false; releaseWakeLock(); state.screen = "home"; state.live = null; render(); }
 
@@ -522,27 +522,58 @@ function showPicker(onPick) {
 let pickerCb = null;
 
 // ---------- export / import ----------
-// iOS PWA : NE PAS utiliser navigator.share (WebKit renomme le .json en "text.txt").
-// On force le nom via un <a download> : data: URL sur iOS (extension respectée + "Enregistrer
-// dans Fichiers"), blob: sur desktop/Android (pas de limite de taille). cf. w3c/web-share#201.
-function doExport() {
+// iOS PWA installée (standalone) : un <a download href="data:..."> ne s'ouvre PLUS.
+// WebKit n'honore pas `download` en standalone → le clic dégénère en navigation vers
+// l'URL data:, bloquée par le navigateur → RIEN ne s'ouvre (bugs WebKit 167341/236943 ;
+// aggravé par iOS 26 qui force le mode standalone). Seule voie fiable : Web Share API
+// niveau 2 — navigator.share({files}) — qui passe le fichier en BINAIRE (pas d'URL, donc
+// pas de blocage) et ouvre la vraie feuille « Enregistrer dans Fichiers » → iCloud.
+// ⚠ navigator.share EXIGE un geste utilisateur : doExport doit être appelé DIRECTEMENT
+//   depuis un clic (bouton « Exporter » / « Sauvegarder » du rappel), jamais depuis un
+//   setTimeout/confirm — sinon NotAllowedError. Cf. showBackupReminder().
+// On n'écrit « sauvegardé » QU'APRÈS succès réel (fini le faux « c'est fait »).
+// Desktop/Android : téléchargement direct blob: (fiable, pas de feuille de partage).
+async function doExport() {
   const text = store.exportJSON();
   const filename = `muscu-sauvegarde-${new Date().toISOString().slice(0, 10)}.json`;
   const ua = navigator.userAgent || "";
   const iOSLike = /iPad|iPhone|iPod/.test(ua) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
-  const a = document.createElement("a");
-  a.download = filename; a.rel = "noopener"; a.style.display = "none";
-  let objUrl = null;
+
   if (iOSLike) {
-    a.href = "data:application/json;charset=utf-8," + encodeURIComponent(text);
-  } else {
-    const blob = new Blob([text], { type: "application/json" });
-    a.href = objUrl = URL.createObjectURL(blob);
+    const file = new File([text], filename, { type: "application/json" });
+    if (!(navigator.canShare && navigator.canShare({ files: [file] })))
+      return toast("Partage indispo — mets iOS à jour, ou ouvre dans Safari");
+    try {
+      await navigator.share({ files: [file], title: filename });
+      store.setSetting("lastBackup", new Date().toISOString());
+      toast("Sauvegarde prête → « Enregistrer dans Fichiers » → iCloud Drive");
+    } catch (err) {
+      if (err && err.name === "AbortError") return toast("Sauvegarde annulée");
+      // NotAllowedError (pas de geste) ou autre : on NE ment PAS, on ne tamponne rien.
+      toast("Échec — appuie sur « Exporter » depuis l'onglet Profil");
+    }
+    return;
   }
+
+  // Desktop / Android : <a download> + blob: → enregistrement direct fiable.
+  const objUrl = URL.createObjectURL(new Blob([text], { type: "application/json" }));
+  const a = document.createElement("a");
+  a.href = objUrl; a.download = filename; a.rel = "noopener"; a.style.display = "none";
   document.body.appendChild(a); a.click(); document.body.removeChild(a);
-  if (objUrl) setTimeout(() => URL.revokeObjectURL(objUrl), 1500);
+  setTimeout(() => URL.revokeObjectURL(objUrl), 1500);
   store.setSetting("lastBackup", new Date().toISOString());
-  toast(iOSLike ? "Aperçu ouvert → « Enregistrer dans Fichiers » → iCloud Drive" : `Sauvegarde exportée (${filename})`);
+  toast(`Sauvegarde exportée (${filename})`);
+}
+// Rappel de sauvegarde après une séance : une MODALE à taper (le tap fournit le geste
+// utilisateur requis par navigator.share), et non plus un confirm()+doExport automatique
+// dans un setTimeout (aucun geste → le partage iOS échouait silencieusement).
+function showBackupReminder() {
+  const m = document.createElement("div"); m.className = "modal"; m.dataset.action = "close-modal";
+  m.innerHTML = `<div class="sheet" data-action="stop"><div class="title">Sauvegarder dans iCloud ?</div>
+    <p class="sub">Tes données sont en local. Range un JSON dans <b>Fichiers → iCloud Drive</b>.</p>
+    <button class="btn big primary" data-action="backup-now">Sauvegarder maintenant</button>
+    <button class="btn big" data-action="close-modal">Plus tard</button></div>`;
+  document.body.appendChild(m);
 }
 function doImport(file) { const r = new FileReader(); r.onload = () => { try { const res = store.importJSON(r.result); toast(`Importé : ${res.sessions} séances, ${res.weights} pesées`); render(); } catch (e) { toast("Fichier invalide"); } }; r.readAsText(file); }
 
@@ -589,6 +620,7 @@ document.addEventListener("click", e => {
   if (a === "cal-next") { if ((state.calOffset || 0) < 0) state.calOffset++; return render(); }
   if (a === "addbw") { const v = numW($("#bw").value); if (v > 0) { store.addBodyWeight(v); render(); } return; }
   if (a === "export") return doExport();
+  if (a === "backup-now") { document.querySelector(".modal")?.remove(); return doExport(); }
   if (a === "import") return $("#importfile").click();
   // exos / routines perso
   if (a === "new-exercise") return showExerciseEditor();
