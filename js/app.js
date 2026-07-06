@@ -2,6 +2,7 @@ import { JOINTS } from "./data.js";
 import * as store from "./store.js";
 import { lineChart } from "./charts.js";
 
+const BUILD = "v12"; // affiché dans Profil + toast d'export → savoir quelle version tourne
 const $ = (s, r = document) => r.querySelector(s);
 const app = $("#app");
 
@@ -190,7 +191,7 @@ function renderProfil() {
       <p class="sub">Données en local. Exporte un JSON et range-le dans <b>Fichiers → iCloud Drive</b>.</p>
       <div class="rowline"><button class="btn primary" data-action="export">Exporter</button><button class="btn" data-action="import">Importer</button></div>
       <label class="rowline"><input type="checkbox" id="remind" ${store.getSetting("remindBackup")?"checked":""}/> Rappel de sauvegarde après chaque séance</label>
-      <div class="sub">Dernière sauvegarde : ${last?new Date(last).toLocaleString("fr-FR"):"jamais"}</div></div>
+      <div class="sub">Dernière sauvegarde : ${last?new Date(last).toLocaleString("fr-FR"):"jamais"} · build ${BUILD}</div></div>
     <input id="importfile" type="file" accept=".json,.txt,application/json,text/plain" hidden/>
     <div class="card col"><div class="title">Réglages</div>
       <label class="rowline"><span class="grow">Repos par défaut (nouveaux exos)</span>
@@ -550,7 +551,7 @@ async function doExport() {
     try {
       await navigator.share({ files: [file] });
       store.setSetting("lastBackup", new Date().toISOString());
-      toast("Sauvegarde prête → « Enregistrer dans Fichiers » → iCloud Drive");
+      toast(`Sauvegarde prête (${BUILD}) : « ${filename} » → Enregistrer dans Fichiers`);
     } catch (err) {
       if (err && err.name === "AbortError") return toast("Sauvegarde annulée");
       // NotAllowedError (pas de geste) ou autre : on NE ment PAS, on ne tamponne rien.
@@ -711,4 +712,15 @@ document.addEventListener("click", e => {
 
 // ---------- boot ----------
 render();
-if ("serviceWorker" in navigator) navigator.serviceWorker.register("./sw.js").catch(() => {});
+// SW + auto-update : dès qu'une nouvelle version prend le contrôle (skipWaiting +
+// clients.claim côté sw.js), on recharge UNE fois → fini le PWA iOS coincé sur l'ancien
+// code. Pas de reload à la toute première install (aucun contrôleur au chargement).
+if ("serviceWorker" in navigator) {
+  const hadController = !!navigator.serviceWorker.controller;
+  let refreshing = false;
+  navigator.serviceWorker.addEventListener("controllerchange", () => {
+    if (refreshing || !hadController) return;
+    refreshing = true; location.reload();
+  });
+  navigator.serviceWorker.register("./sw.js").then(reg => { try { reg.update(); } catch (e) {} }).catch(() => {});
+}
