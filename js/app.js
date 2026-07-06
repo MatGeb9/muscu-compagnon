@@ -540,11 +540,15 @@ async function doExport() {
   const iOSLike = /iPad|iPhone|iPod/.test(ua) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
 
   if (iOSLike) {
-    const file = new File([text], filename, { type: "application/json" });
+    // iOS nomme le fichier partagé d'après le TYPE MIME, pas d'après File.name :
+    // application/json y dégénère en « text.txt » (puis « text 2.txt »…). octet-stream
+    // n'a pas d'extension imposée → iOS garde le nom tel quel (muscu-…​.json). On partage
+    // les fichiers SEULS (pas de title, sinon iOS peut renommer/ignorer — web-share#201/#279).
+    const file = new File([text], filename, { type: "application/octet-stream" });
     if (!(navigator.canShare && navigator.canShare({ files: [file] })))
       return toast("Partage indispo — mets iOS à jour, ou ouvre dans Safari");
     try {
-      await navigator.share({ files: [file], title: filename });
+      await navigator.share({ files: [file] });
       store.setSetting("lastBackup", new Date().toISOString());
       toast("Sauvegarde prête → « Enregistrer dans Fichiers » → iCloud Drive");
     } catch (err) {
