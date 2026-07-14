@@ -166,6 +166,22 @@ textarea.field{width:100%;resize:vertical;font:inherit}
 /* sélecteur d'exercice */
 .pickrow{cursor:pointer}.pickrow .chev{font-size:20px}
 
+/* bilan / tableau de bord */
+.mbar{display:flex;align-items:center;gap:10px;padding:5px 0}
+.mbar-lbl{width:86px;font-size:13px;flex:none}
+.mbar-track{flex:1;height:10px;background:var(--card2);border-radius:6px;overflow:hidden}
+.mbar-fill{display:block;height:100%;border-radius:6px;min-width:2px;transition:width .3s}
+.mbar-val{width:44px;text-align:right;font-size:12px;color:var(--sub);flex:none;font-variant-numeric:tabular-nums}
+.fresh-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin:2px 0 6px}
+.fresh{background:var(--card2);border-radius:12px;padding:9px 11px;border-left:3px solid var(--line)}
+.fresh b{display:block;font-size:14px}
+.fresh span{font-size:12px;color:var(--sub)}
+.fresh.neg{border-left-color:var(--accent)}
+.fresh.ok{border-left-color:var(--green)}
+.fresh.rec{border-left-color:var(--sub)}
+.dot{display:inline-block;width:8px;height:8px;border-radius:50%;vertical-align:middle;margin-right:2px}
+.dot.neg{background:var(--accent)}.dot.ok{background:var(--green)}.dot.rec{background:var(--sub)}
+
 /* édition d'une séance passée */
 .seteditrow{display:flex;align-items:center;gap:6px;padding:5px 0;border-top:1px solid var(--line)}
 .seteditrow:first-of-type{border-top:none}

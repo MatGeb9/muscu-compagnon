@@ -1,12 +1,13 @@
 import { JOINTS } from "./data.js";
 import * as store from "./store.js";
 import { lineChart } from "./charts.js";
+import * as dashboard from "./dashboard.js";
 
-const BUILD = "v12"; // affiché dans Profil + toast d'export → savoir quelle version tourne
+const BUILD = "v13"; // affiché dans Profil + toast d'export → savoir quelle version tourne
 const $ = (s, r = document) => r.querySelector(s);
 const app = $("#app");
 
-let state = { tab: "home", screen: "home", routineId: null, warmup: null, live: null, editor: null, viewSessionId: null, chartEx: null, calOffset: 0 };
+let state = { tab: "home", screen: "home", routineId: null, warmup: null, live: null, editor: null, viewSessionId: null, chartEx: null, dashEx: null, calOffset: 0 };
 let sessionTimer = null, restTimer = null;
 let rest = { running: false, remaining: 0, total: 0, endAt: 0 };
 let wakeLock = null, audioCtx = null;
@@ -40,11 +41,11 @@ function render() {
   if (state.screen === "live") return renderLive();
   if (state.screen === "editor") return renderEditor();
   if (state.screen === "editsession") return renderSessionEdit();
-  app.innerHTML = ({ home: renderHome, programmes: renderProgrammes, exos: renderExos, progress: renderProgress, profil: renderProfil }[state.tab] || renderHome)();
+  app.innerHTML = ({ home: renderHome, dashboard: renderDashboard, programmes: renderProgrammes, exos: renderExos, progress: renderProgress, profil: renderProfil }[state.tab] || renderHome)();
   renderTabbar();
 }
 function renderTabbar() {
-  const tabs = [["home","Entraînement","🏋️"],["programmes","Programmes","📋"],["exos","Exercices","📚"],["progress","Progression","📈"],["profil","Profil","👤"]];
+  const tabs = [["home","Entraînement","🏋️"],["dashboard","Bilan","📊"],["programmes","Programmes","📋"],["exos","Exercices","📚"],["progress","Progression","📈"],["profil","Profil","👤"]];
   const bar = $("#tabbar");
   bar.innerHTML = tabs.map(([k,l,i]) => `<button class="tab ${state.tab===k?"active":""}" data-tab="${k}"><span>${i}</span>${l}</button>`).join("");
   bar.style.display = (state.screen === "home" ? "" : "none");
@@ -182,6 +183,11 @@ function renderProgress() {
     <h2>Calendrier</h2>${monthCalendar()}
     <h2>Courbes</h2>${chartBlock}${bwBlock}<h2>Séances réalisées</h2>${list}<div class="pad"></div></div>`;
 }
+
+// ---------- BILAN (dashboard) ----------
+// Vue d'ensemble agrégée. Toute la logique/rendu vit dans dashboard.js (fonctions pures) ;
+// ici on ne fait que déléguer en passant l'exo sélectionné du graphe (state.dashEx).
+function renderDashboard() { return dashboard.view({ ex: state.dashEx }); }
 
 // ---------- PROFIL ----------
 function renderProfil() {
@@ -655,6 +661,7 @@ document.addEventListener("input", e => {
 document.addEventListener("change", e => {
   if (e.target.id === "importfile" && e.target.files[0]) doImport(e.target.files[0]);
   if (e.target.id === "chartex") { state.chartEx = e.target.value; render(); }
+  if (e.target.id === "dashex") { state.dashEx = e.target.value; render(); }
   if (e.target.id === "se-rpe" && state.sessionEdit) state.sessionEdit.sessionRPE = e.target.value ? +e.target.value : null;
   if (e.target.id === "remind") store.setSetting("remindBackup", e.target.checked);
   if (e.target.id === "defrest") store.setSetting("defaultRest", +e.target.value);
