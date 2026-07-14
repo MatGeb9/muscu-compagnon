@@ -3,11 +3,11 @@ import * as store from "./store.js";
 import { lineChart } from "./charts.js";
 import * as dashboard from "./dashboard.js";
 
-const BUILD = "v13"; // affiché dans Profil + toast d'export → savoir quelle version tourne
+const BUILD = "v14"; // affiché dans Profil + toast d'export → savoir quelle version tourne
 const $ = (s, r = document) => r.querySelector(s);
 const app = $("#app");
 
-let state = { tab: "home", screen: "home", routineId: null, warmup: null, live: null, editor: null, viewSessionId: null, chartEx: null, dashEx: null, calOffset: 0 };
+let state = { tab: "home", screen: "home", routineId: null, warmup: null, live: null, editor: null, viewSessionId: null, chartEx: null, dashEx: null, calOffset: 0, pendingProg: null };
 let sessionTimer = null, restTimer = null;
 let rest = { running: false, remaining: 0, total: 0, endAt: 0 };
 let wakeLock = null, audioCtx = null;
@@ -91,8 +91,8 @@ function renderHome() {
 function renderProgrammes() {
   const body = store.getRoutines().map(r => `
     <div class="card col"><div class="rowline"><span class="bar" style="background:${r.color}"></span>
-      <div class="title grow">${r.name}${r.custom ? ' <span class="tag">perso</span>' : ''}</div>
-      ${r.custom ? `<button class="link" data-action="edit-routine" data-id="${r.id}">Modifier</button>` : ""}</div>
+      <div class="title grow">${r.name}${r.custom ? ' <span class="tag">perso</span>' : (r.edited ? ' <span class="tag">modifié</span>' : '')}</div>
+      <button class="link" data-action="edit-routine" data-id="${r.id}">Modifier</button></div>
       ${r.exercises.map(e => { const x = exOf(e.ex); return `
         <div class="exline" data-action="info" data-ex="${e.ex}"><div class="grow"><b>${x.name}</b>
         <div class="sub">${e.sets} séries · ${e.repLow}-${e.repHigh} reps · repos ${e.rest}s${e.superset?` · super set ${e.superset}`:""}${e.ladder&&e.ladder.length?` · échelle ${e.ladder.join("/")}`:""}</div>
@@ -415,11 +415,33 @@ function saveSession(sessionRPE) {
   const totalVolume = sets.filter(s => !s.isWarmup).reduce((a, s) => a + s.weight * s.reps, 0);
   store.addSession({ id: store.uid(), date: new Date(L.startAt).toISOString(), endDate: new Date().toISOString(),
     routineId: L.routineId, routineName: L.routineName, color: L.color, sessionRPE: sessionRPE || null, totalVolume, sets });
+  // Structure changée pendant la séance ? -> on proposera de mettre à jour le programme (avant le rappel de sauvegarde).
+  const routine = store.getRoutine(L.routineId);
+  let progUpd = null;
+  if (routine) { const diff = store.liveStructureDiff(routine, L.exercises);
+    if (diff.changed) progUpd = { routineId: L.routineId, name: routine.name, diff, exercises: store.routineFromLive(routine, L.exercises, diff) }; }
   document.querySelector(".modal")?.remove();
   clearInterval(sessionTimer); clearInterval(restTimer); rest.running = false; releaseWakeLock();
   state.screen = "home"; state.tab = "home"; state.live = null; render();
   toast("Séance enregistrée 💪");
-  if (store.getSetting("remindBackup")) setTimeout(showBackupReminder, 700);
+  if (progUpd) showProgramUpdateModal(progUpd);
+  else if (store.getSetting("remindBackup")) setTimeout(showBackupReminder, 700);
+}
+// Propose d'enregistrer les changements de structure de la séance dans le programme. Puis, quel que soit
+// le choix, enchaîne sur le rappel de sauvegarde (comme le flux normal de fin de séance).
+function afterProgModal() { if (store.getSetting("remindBackup")) setTimeout(showBackupReminder, 300); }
+function showProgramUpdateModal(p) {
+  state.pendingProg = p;
+  const parts = [];
+  if (p.diff.added.length) parts.push(`${p.diff.added.length} exo ajouté${p.diff.added.length > 1 ? "s" : ""}`);
+  if (p.diff.removed.length) parts.push(`${p.diff.removed.length} retiré${p.diff.removed.length > 1 ? "s" : ""}`);
+  if (p.diff.setChanged.length) parts.push("séries modifiées");
+  const m = document.createElement("div"); m.className = "modal"; m.dataset.action = "prog-skip";
+  m.innerHTML = `<div class="sheet" data-action="stop"><div class="title">Mettre à jour le programme ?</div>
+    <p class="sub">Tu as changé la structure pendant la séance (${parts.join(", ")}). Enregistrer ces changements dans « ${p.name} » pour la prochaine fois ?</p>
+    <button class="btn big primary" data-action="prog-update">Mettre à jour le programme</button>
+    <button class="btn big" data-action="prog-skip">Garder tel quel</button></div>`;
+  document.body.appendChild(m);
 }
 function cancelLive() { clearInterval(sessionTimer); clearInterval(restTimer); rest.running = false; releaseWakeLock(); state.screen = "home"; state.live = null; render(); }
 
@@ -485,8 +507,8 @@ function saveSessionEdit() {
 
 // ---------- ÉDITEUR DE SÉANCE PERSO ----------
 function openEditor(id) {
-  if (id) { const r = store.getRoutine(id); state.editor = { id, name: r.name, color: r.color, summary: r.summary || "", exercises: r.exercises.map(e => ({ ...e })) }; }
-  else state.editor = { id: null, name: "", color: "#8E44E6", summary: "", exercises: [] };
+  if (id) { const r = store.getRoutine(id); state.editor = { id, builtin: !!r.builtin, edited: !!r.edited, name: r.name, color: r.color, summary: r.summary || "", exercises: r.exercises.map(e => ({ ...e })) }; }
+  else state.editor = { id: null, builtin: false, edited: false, name: "", color: "#8E44E6", summary: "", exercises: [] };
   state.screen = "editor"; render();
 }
 const COLORS = ["#FF7A00","#E23B3B","#14B8A6","#2E7BE6","#8E44E6","#27c06a","#E6007A","#E6A700"];
@@ -508,7 +530,9 @@ function renderEditor() {
           <label class="sub">Reps haut<input class="field" type="number" inputmode="numeric" value="${e.repHigh}" data-ef="repHigh" data-i="${i}"/></label>
           <label class="sub">Repos s<input class="field" type="number" inputmode="numeric" value="${e.rest}" data-ef="rest" data-i="${i}"/></label></div></div>`; }).join("")}
       <button class="btn" data-action="ed-addex" style="width:100%">+ Ajouter un exercice</button>
-      ${ed.id?`<button class="btn big" data-action="del-routine" data-id="${ed.id}" style="background:#3a1d1d;color:#ff6a6a">Supprimer la séance</button>`:""}
+      ${!ed.id ? "" : (ed.builtin
+        ? (ed.edited ? `<button class="btn big" data-action="reset-routine" data-id="${ed.id}" style="background:#2a2a1d;color:#E6A700">Réinitialiser au programme d'origine</button>` : "")
+        : `<button class="btn big" data-action="del-routine" data-id="${ed.id}" style="background:#3a1d1d;color:#ff6a6a">Supprimer la séance</button>`)}
       <div class="pad"></div></div>`;
   renderTabbar();
 }
@@ -625,6 +649,8 @@ document.addEventListener("click", e => {
   if (a === "rest-skip") { clearInterval(restTimer); rest.running = false; return render(); }
   if (a === "finish") return finishWorkout();
   if (a === "save-session") { saveSession(el.dataset.rpe ? +el.dataset.rpe : null); return; }
+  if (a === "prog-update") { const p = state.pendingProg; state.pendingProg = null; if (p) { store.updateRoutine(p.routineId, { exercises: p.exercises }); toast("Programme mis à jour"); } document.querySelector(".modal")?.remove(); afterProgModal(); return; }
+  if (a === "prog-skip") { state.pendingProg = null; document.querySelector(".modal")?.remove(); afterProgModal(); return; }
   if (a === "cancel-live") { if (confirm("Annuler la séance ? Les séries non enregistrées seront perdues.")) cancelLive(); return; }
   // progression / profil
   if (a === "cal-prev") { state.calOffset = (state.calOffset || 0) - 1; return render(); }
@@ -645,6 +671,7 @@ document.addEventListener("click", e => {
   if (a === "ed-addex") return showPicker(id => { const dft = exDefaults(id); state.editor.exercises.push({ ex: id, sets: dft.sets, repLow: 8, repHigh: 12, rest: dft.rest, ladder: [], notes: "" }); document.querySelector(".modal")?.remove(); renderEditor(); });
   if (a === "save-routine") return saveRoutine();
   if (a === "del-routine") { if (confirm("Supprimer cette séance perso ?")) { store.deleteRoutine(el.dataset.id); state.screen = "home"; state.tab = "programmes"; state.editor = null; render(); } return; }
+  if (a === "reset-routine") { if (confirm("Réinitialiser ce programme à sa version d'origine ? Tes modifications seront perdues.")) { store.deleteRoutine(el.dataset.id); state.screen = "home"; state.tab = "programmes"; state.editor = null; render(); toast("Programme réinitialisé"); } return; }
   // picker
   if (a === "pick") { const cb = pickerCb; pickerCb = null; if (cb) cb(el.dataset.ex); return; }
 });

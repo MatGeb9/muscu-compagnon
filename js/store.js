@@ -11,6 +11,7 @@ const DEFAULT = () => ({
   bodyWeights: [],         // { id, date, weightKg }
   customExercises: {},     // id -> { name, group, equipment, instructions, cues, mistakes, custom:true }
   customRoutines: [],      // { id, name, color, summary, exercises:[...], custom:true }
+  routineOverrides: {},    // "b0" -> { name?, color?, summary?, exercises? } : édition persistée d'un programme livré (data.js est en dur)
   settings: { lastBackup: null, remindBackup: true, defaultRest: 90, notify: false, vibrate: true },
 });
 
@@ -39,8 +40,13 @@ export function addCustomExercise(o) {
 }
 
 // --- Séances (programmes) : built-in + perso, avec id stable ---
+const isBuiltin = id => /^b\d+$/.test(id);
 export function getRoutines() {
-  const builtin = PROGRAM.map((r, i) => ({ id: "b" + i, builtin: true, ...r }));
+  const ov = load().routineOverrides || {};
+  const builtin = PROGRAM.map((r, i) => {
+    const id = "b" + i, base = { id, builtin: true, ...r };
+    return ov[id] ? { ...base, ...ov[id], id, builtin: true, edited: true } : base; // édition persistée = « modifié »
+  });
   return [...builtin, ...load().customRoutines];
 }
 export function getRoutine(id) { return getRoutines().find(r => r.id === id); }
@@ -50,11 +56,45 @@ export function addCustomRoutine(o) {
   save(); return id;
 }
 export function updateRoutine(id, o) {
-  const d = load(); const r = d.customRoutines.find(x => x.id === id); if (!r) return;
+  const d = load();
+  if (isBuiltin(id)) { d.routineOverrides[id] = { ...(d.routineOverrides[id] || {}), ...o }; save(); return; } // programme livré -> override persisté
+  const r = d.customRoutines.find(x => x.id === id); if (!r) return;
   Object.assign(r, o); save();
 }
 export function deleteRoutine(id) {
-  const d = load(); d.customRoutines = d.customRoutines.filter(x => x.id !== id); save();
+  const d = load();
+  if (isBuiltin(id)) { delete d.routineOverrides[id]; save(); return; } // « réinitialiser » = retirer l'override
+  d.customRoutines = d.customRoutines.filter(x => x.id !== id); save();
+}
+
+// --- Changements de structure faits pendant une séance -> proposition de MAJ du programme ---
+// Compare la séance live à sa routine : exos ajoutés / retirés / nb de séries de travail modifié.
+export function liveStructureDiff(routine, liveExercises) {
+  const liveByEx = {};
+  for (const e of liveExercises) liveByEx[e.ex] = (e.sets || []).filter(s => !s.isWarmup && !s.drop).length;
+  const routineByEx = {};
+  for (const e of routine.exercises) routineByEx[e.ex] = e.sets;
+  const added = [], removed = [], setChanged = [];
+  for (const id of Object.keys(liveByEx)) {
+    if (!(id in routineByEx)) added.push(id);
+    else if (liveByEx[id] !== routineByEx[id]) setChanged.push(id);
+  }
+  for (const id of Object.keys(routineByEx)) if (!(id in liveByEx)) removed.push(id);
+  return { changed: !!(added.length || removed.length || setChanged.length), added, removed, setChanged, liveByEx };
+}
+// Reconstruit la liste d'exercices de la routine depuis la séance : garde l'ordre d'origine pour les
+// exos conservés (séries mises à jour), ajoute les nouveaux à la fin (paramètres par défaut de l'exo).
+export function routineFromLive(routine, liveExercises, diff) {
+  const d = diff || liveStructureDiff(routine, liveExercises);
+  const out = [], seen = new Set();
+  for (const e of routine.exercises) if (e.ex in d.liveByEx) { out.push({ ...e, sets: d.liveByEx[e.ex] || e.sets }); seen.add(e.ex); }
+  for (const e of liveExercises) {
+    if (seen.has(e.ex)) continue; seen.add(e.ex);
+    const x = allExercises()[e.ex] || {};
+    out.push({ ex: e.ex, sets: d.liveByEx[e.ex] || x.defaultSets || 4, repLow: e.repLow || 8, repHigh: e.repHigh || 12,
+      rest: e.rest || x.defaultRest || getSetting("defaultRest") || 90, ladder: [], notes: e.notes || "" });
+  }
+  return out;
 }
 
 // --- Séances réalisées ---
@@ -153,6 +193,7 @@ export function importJSON(text) {
     const ids = new Set(d.customRoutines.map(r => r.id));
     for (const r of inc.customRoutines) if (!ids.has(r.id)) d.customRoutines.push(r);
   }
+  if (inc.routineOverrides) d.routineOverrides = { ...inc.routineOverrides, ...d.routineOverrides }; // programmes édités (local prioritaire)
   d.sessions.sort((a, b) => (b.date || "").localeCompare(a.date || ""));
   d.bodyWeights.sort((a, b) => (b.date || "").localeCompare(a.date || ""));
   save(); return added;
