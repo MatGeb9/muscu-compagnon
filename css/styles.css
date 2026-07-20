@@ -66,8 +66,9 @@ h2{font-size:15px;color:var(--sub);text-transform:uppercase;letter-spacing:.04em
 
 /* grille de séries */
 .exercise{padding:14px}
-.setgrid{display:grid;grid-template-columns:38px 1fr 1fr 50px 40px;gap:6px;align-items:center;padding:4px 0}
+.setgrid{display:grid;grid-template-columns:32px 1fr 1fr 44px 38px 26px;gap:6px;align-items:center;padding:4px 0}
 .setgrid .rpe{padding:6px 2px;font-size:14px}
+.setgrid .del{background:none;border:none;color:var(--sub);font-size:15px;padding:0;width:26px;height:38px;line-height:1}
 .setgrid.head{color:var(--sub);font-size:12px}
 .setgrid.head span{text-align:center}.setgrid.head span:first-child{text-align:left}
 .setgrid>span:first-child{font-weight:700}

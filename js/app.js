@@ -3,7 +3,7 @@ import * as store from "./store.js";
 import { lineChart } from "./charts.js";
 import * as dashboard from "./dashboard.js";
 
-const BUILD = "v14"; // affiché dans Profil + toast d'export → savoir quelle version tourne
+const BUILD = "v15"; // affiché dans Profil + toast d'export → savoir quelle version tourne
 const $ = (s, r = document) => r.querySelector(s);
 const app = $("#app");
 
@@ -300,13 +300,14 @@ function renderLive() {
             <button class="info" data-action="info" data-ex="${e.ex}">ⓘ</button>
             <button class="info" data-action="del-ex" data-ei="${ei}">✕</button></div>
           ${e.lastSummary ? `<div class="note">${e.lastSummary}</div>` : ""}${e.notes ? `<div class="note">📝 ${e.notes}</div>` : ""}
-          <div class="setgrid head"><span>Série</span><span>kg</span><span>Reps</span><span>RPE</span><span>✓</span></div>
+          <div class="setgrid head"><span>Série</span><span>kg</span><span>Reps</span><span>RPE</span><span>✓</span><span></span></div>
           ${e.sets.map((s, si) => `<div class="setgrid ${s.done?"done":""}">
             <span class="${s.isWarmup?"warm":s.drop?"drop":""}">${s.isWarmup?"Éch":s.drop?"↘":s.setIndex}</span>
             <input class="field" type="text" inputmode="decimal" value="${s.weight}" data-f="weight" data-ei="${ei}" data-si="${si}"/>
             <input class="field" type="number" inputmode="numeric" value="${s.reps}" data-f="reps" data-ei="${ei}" data-si="${si}"/>
             <select class="field rpe" data-f="rpe" data-ei="${ei}" data-si="${si}"><option value="">–</option>${RPES.map(v=>`<option ${s.rpe==v?"selected":""}>${v}</option>`).join("")}</select>
-            <button class="check ${s.done?"on":""}" data-action="toggle" data-ei="${ei}" data-si="${si}">${s.done?"✓":"○"}</button></div>`).join("")}
+            <button class="check ${s.done?"on":""}" data-action="toggle" data-ei="${ei}" data-si="${si}">${s.done?"✓":"○"}</button>
+            <button class="del" data-action="del-set" data-ei="${ei}" data-si="${si}" aria-label="Supprimer la série">✕</button></div>`).join("")}
           <div class="rowline" style="gap:8px;margin-top:6px">
             <button class="btn ghost" style="margin-top:0;flex:1" data-action="addset" data-ei="${ei}">+ série</button>
             <button class="btn ghost" style="margin-top:0;flex:1" data-action="dropset" data-ei="${ei}">↘ dégressif</button></div></div>`).join("")}
@@ -642,6 +643,7 @@ document.addEventListener("click", e => {
   if (a === "toggle") { const ex = state.live.exercises[ei], s = ex.sets[si]; s.done = !s.done; const next = ex.sets[si + 1]; const skipRest = next && next.drop && !next.done; if (s.done && !s.isWarmup && !skipRest) startRest(ex.rest); else render(); refreshLiveStats(); return; }
   if (a === "addset") { const ex = state.live.exercises[ei]; const work = ex.sets.filter(s => !s.isWarmup && !s.drop); const last = ex.sets[ex.sets.length - 1]; ex.sets.push({ setIndex: work.length + 1, weight: last?.weight || 0, reps: last?.reps || ex.repHigh, rpe: null, isWarmup: false, done: false }); return render(); }
   if (a === "dropset") { const ex = state.live.exercises[ei]; const lastWork = [...ex.sets].reverse().find(s => !s.isWarmup); const base = numW(lastWork ? lastWork.weight : 0); const idx = ex.sets.filter(s => !s.isWarmup && !s.drop).length + 1; ex.sets.push({ setIndex: idx, weight: Math.round(base * 0.8 * 2) / 2, reps: ex.repHigh, rpe: null, isWarmup: false, drop: true, done: false }); clearInterval(restTimer); rest.running = false; return render(); }
+  if (a === "del-set") { const ex = state.live.exercises[ei]; ex.sets.splice(si, 1); let n = 0; ex.sets.forEach(s => { if (!s.isWarmup && !s.drop) s.setIndex = ++n; }); return render(); } // supprime UNE série pendant la séance (ex. 5→4) + renumérote les séries de travail
   if (a === "del-ex") { if (state.live.exercises.length > 1) state.live.exercises.splice(ei, 1); return render(); }
   if (a === "add-ex") return showPicker(id => { const x = exOf(id), dft = exDefaults(id), last = store.lastSetsFor(x.name); state.live.exercises.push({ ex: id, name: x.name, rest: dft.rest, repLow: 8, repHigh: 12, superset: null, notes: "", lastSummary: last.length?"Dernière fois : "+last.map(s=>`${fmtNum(s.weight)}×${s.reps}`).join("  "):"", sets: Array.from({length: dft.sets}, (_, k) => ({ setIndex: k+1, weight: last[0]?.weight||0, reps: 12, rpe: null, isWarmup: false, done: false })) }); document.querySelector(".modal")?.remove(); render(); });
   if (a === "rest-add") { rest.endAt += 15000; rest.total += 15; return; }
