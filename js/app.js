@@ -3,7 +3,7 @@ import * as store from "./store.js";
 import { lineChart } from "./charts.js";
 import * as dashboard from "./dashboard.js";
 
-const BUILD = "v15"; // affiché dans Profil + toast d'export → savoir quelle version tourne
+const BUILD = "v16"; // affiché dans Profil + toast d'export → savoir quelle version tourne
 const $ = (s, r = document) => r.querySelector(s);
 const app = $("#app");
 
